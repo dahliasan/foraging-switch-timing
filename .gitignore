@@ -1,0 +1,17 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.csv
+*.DS_Store
+*.Rdata
+*.rdata
+*.tiff
+*.pdf
+*.jpg
+*.png
+Enviro data
+*.jpeg
+HighstatLib.r
+*.Rproj
+*.html

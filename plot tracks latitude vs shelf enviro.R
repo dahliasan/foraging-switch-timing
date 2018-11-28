@@ -6,6 +6,7 @@ library(lubridate)
 # devtools::install_github("kassambara/ggpubr")
 library(ggpubr)
 library(RColorBrewer)
+options(dplyr.width = Inf)
 
 load('sstAll2017(outliersRemoved).Rdata')
 load('degAll2016(outliersRemoved).Rdata')
@@ -35,19 +36,11 @@ tracks <- tbl_df(tracks)
 colnames(tracks)[1] <- 'Date'
 
 ## Import foraging trips
-ff <- list.files(pattern = 'foragingtrips')
-# ft <- data.frame()
-# for(i in seq_along(ff)){
-#   f <- read.csv(ff[i])
-#   f$StartDate <- as.POSIXct(f$StartDate, 'GMT')
-#   f$LastDate <- as.POSIXct(f$LastDate, 'GMT')
-#   f$id <- strsplit(ff[i], split = '_')[[1]][1]
-#   ft <- rbind(ft, f)
-# }
-# ft <- tbl_df(ft)
+ftfolder <- "~/Dropbox/phd/LNFS research/LNFS processed data/foraging switch timing/foraging trip analysis/"
+ff <- list.files(ftfolder, pattern = 'foragingtrips')
 
 ft <- map(ff, function(x){
-  f <- read_csv(x)
+  f <- read_csv(paste0(ftfolder, x))
   f$StartDate <- as.POSIXct(f$StartDate, 'GMT')
   f$LastDate <- as.POSIXct(f$LastDate, 'GMT')
   f$id <- strsplit(x, split = '_')[[1]][1]
@@ -62,15 +55,17 @@ tmp <- Map(function(trac, trip){
   Map(function(t1, t2){which(trac$Date >= t1 & trac$Date <= t2)},
       as.list(trip$LastDate), as.list(lead(trip$StartDate)))
 }, split(tracks, tracks$id), split(ft, ft$id))
-tmp <- lapply(tmp, unlist) # get index of rows for each seal (as a list) that are to become at the colony
+
+# get index of rows for each seal (as a list) that are to become at the colony
+tmp <- lapply(tmp, unlist) 
 tracks <- Map(function(x, y){
   x$colony <- 0
   x$colony[y] <- 1
   return(x)
 }, split(tracks, tracks$id), tmp)
 tracks <- do.call(rbind, tracks)
-tracks$Lon[tracks$id != '307' & tracks$id != '317' & tracks$id != '324' & tracks$id != '340' & tracks$colony == 1] <- 137.4680
-tracks$Lat[tracks$id != '307' & tracks$id != '317' & tracks$id != '324' & tracks$id != '340' & tracks$colony == 1] <- -36.06900
+tracks$Lon[!tracks$id %in% c('307', '317', '324', '340') & tracks$colony == 1] <- 137.4680
+tracks$Lat[!tracks$id %in% c('307', '317', '324', '340') & tracks$colony == 1] <- -36.06900
 
 
 ## add trip id to locations 
@@ -80,7 +75,19 @@ tracks2 <- map(split(ft, 1:nrow(ft)), function(x){
   end <- x$LastDate
   trip <- x$X1
   ID <- x$id
-  y <- with(tracks, tracks[Date >= start & Date <= end & id == ID,])
+  i <- with(tracks, which(Date >= start & Date <= end & id == ID))
+  firstloc <- tracks[first(i), ]
+  lastloc <- tracks[last(i), ]
+  
+  ##### v2 update start ----
+  # this to make sure trips start and end from colony
+  if(firstloc$Lon != 137.4680 & firstloc$Lat != -36.06900) i <- c(min(i) - 1, i) 
+  if(lastloc$Lon != 137.4680 & lastloc$Lat != -36.06900) i <- c(i, max(i) + 1) 
+  tracks$Lat[c(first(i), last(i))] <- -36.06900
+  tracks$Lon[c(first(i), last(i))] <- 137.4680
+  ##### v2 update end ----
+  
+  y <- tracks[i,]
   y$trip <- trip
   return(y)
 }) %>%  reduce(bind_rows)
@@ -88,7 +95,25 @@ tracks2 <- map(split(ft, 1:nrow(ft)), function(x){
 tracks3 <- tracks[!tracks$Date %in% tracks2$Date,]
 tracks2 <- bind_rows(tracks2, tracks3) %>% arrange(id, Date)
 tracks <- tracks2
-# save(tracks, file = "glsTracksAll_cleaned.RData" )
+tracks$colony[tracks$Lon == 137.4680 & tracks$Lat == -36.06900] <- 1
+tracks <- na.omit(tracks)
+
+t <- map(split(tracks, paste(tracks$id, tracks$trip, sep = '_')), function(x){
+  if(length(which(x$colony == 1)) == 2){
+    x <- x %>% 
+      mutate(keep = cumsum(colony)) %>% 
+      filter(keep > 0) %>% 
+      select(-keep)
+  } else if(length(which(x$colony == 1)) > 2){
+    rows <- which(x$colony == 1)
+    rmaxdiff <- which.max(diff(rows))
+    rowskeep <- rows[c(rmaxdiff, rmaxdiff+1)]
+    x <- x[rowskeep[1]:rowskeep[2],]
+  }
+  x
+}) %>% reduce(bind_rows)
+tracks <- t
+save(tracks, file = "glsTracksAll_cleaned_v2.RData" )
 
 # Import Bonny Upwelling SSTA 16-17 ---------------------------------------
 dir(pattern = 'bonney')

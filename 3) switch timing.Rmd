@@ -642,15 +642,13 @@ mass %>% filter(season %in% c('summer', 'winter')) %>%
   geom_boxplot(aes(x = year, y = mass, colour = season))
 
 ```
-
-
 ## Foraging trip summaries
 ```{r}
-ftsumm <- ft %>% filter(! id %in% c('307', '317', '324','340', '315', '353')) %>%
+ftsumm <- ft %>% filter(id != '307', id != '317', id != '324',id!= '340',id!='315', id!='353') %>%
   dplyr::select(id, StartDate, LastDate, Dur, colonytime, season, year, floc) %>% 
   mutate(season = ifelse(month(StartDate) < 5, 'Upwelling', 'Downwelling')) %>% 
   mutate(season = factor(season, levels = c('Upwelling', 'Downwelling'))) %>% 
-  mutate(floc = factor(ifelse(floc == 'oceanic', 'oceanic', 'shelf')))
+   mutate(floc = factor(ifelse(floc == 'oceanic', 'oceanic', 'shelf')))
 # ftsumm$season <- as.character(ftsumm$season)
 # ftsumm$season[ftsumm$season == 'Winter' | ftsumm$season == 'Autumn'] <- "Autumn/Winter"
 # ftsumm$season <- factor(ftsumm$season, levels = c('Summer', 'Autumn/Winter'))
@@ -707,7 +705,7 @@ ftsumm %>%
   slice_rows('season') %>% 
   by_slice(partial(t.test, Dur~year)) -> test
 
-test$.out # shows results, arranged by oceanic, shelf. both are significantly different between years. 
+test$.out #shows results, arranged by oceanic, shelf. both are significantly different between years. 
 ```
 
 ### Foraging trip duration
@@ -744,9 +742,7 @@ Preventing collinearity (high correlation between explanatory (X) variables) is 
 source("HighstatLib.r")
 # remove all non-continuous vars
 # keep removing variables 1 by 1 with vif > 3 until no more vars have vif > 3
-ftl2 <- ftl2  %>% filter(!id %in% c('315', '353'))
-ft3 <- ftl2 %>% 
-  dplyr::select(-X, -id, -minLat, -Lon_minLat, -floc, -date, -season, -year, -switch, -wind_index, -SSTA_min, -SSHA_max, -wind_min, -SSHA_mean, -t_max, -SSTA_max, -wind_mean, -t_SD, -t_min)
+ft3 <- ftl2 %>% dplyr::select(-X, -id, -minLat, -Lon_minLat, -floc, -date, -season, -year, -switch, -wind_index, -SSTA_min, -SSHA_max, -wind_min, -SSHA_mean, -t_max, -SSTA_max, -wind_mean, -t_SD, -t_min)
 corvif(ft3)
 
 # add the nominal variables back to processed dataset.
@@ -888,23 +884,23 @@ mod2 <- update(mod1, .~. -wind_max)
 drop1(mod2,test="Chisq")
 mod3 <- update(mod2, .~. -sal_SD)
 drop1(mod3,test="Chisq")
-mod4 <- update(mod3, .~. -SSHA_SD)
+mod4 <- update(mod3, .~. -mld_mean)
 drop1(mod4,test="Chisq")
-mod5 <- update(mod4, .~. -sam)
+mod5 <- update(mod4, .~. -SSTA_SD)
 drop1(mod5,test="Chisq")
-mod6 <- update(mod5, .~. -mld_mean)
+mod6 <- update(mod5, .~. -mld_SD)
 drop1(mod6,test="Chisq")
-mod7 <- update(mod6, .~. -SSTA_mean)
+mod7 <- update(mod6, .~. -sam)
 drop1(mod7,test="Chisq")
-mod8 <- update(mod7, .~. -mld_SD)
+mod8 <- update(mod7, .~. -year)
 drop1(mod8,test="Chisq")
-mod9 <- update(mod8, .~. -SSTa_ncells)
+mod9 <- update(mod8, .~. -wind_SD)
 drop1(mod9,test="Chisq")
-mod10 <- update(mod9, .~. -year)
+mod10 <- update(mod9, .~. -SSTA_mean)
 drop1(mod10,test="Chisq")
-mod11 <- update(mod10, .~. -wind_SD)
+mod11 <- update(mod10, .~. -SSHA_SD)
 drop1(mod11,test="Chisq")
-mod12 <- update(mod11, .~. -SSTA_SD)
+mod12 <- update(mod11, .~. -SSTa_ncells)
 drop1(mod12,test="Chisq")
 
 # add plausible interactions with strongest x terms
@@ -978,8 +974,8 @@ summ_table <- summ_table %>%
   mutate_if(is.numeric, funs(signif(., 3)))
 summ_table$group[6] <- 'random'
 
-# write.csv(summ_table, file = './3) GLMM/glmm best model summary.csv')
-save(best2, data2, file = './3) GLMM/bestGlmm.RData')
+# write.csv(summ_table, file = 'glmm best model summary.csv')
+save(best2, data2, file = './bestGlmm.RData')
 ```
 diagnostic tests show that residuals are uniform, there is no overdispersion and no temporal autocorrelation i.e. all the p values for the tests are > 0.05.
 
@@ -1110,6 +1106,301 @@ testTemporalAutocorrelation(simulationOutput = simulationOutput, time = data2$da
 ```
 best2glm has greater overdispersion compared to best1glm. In addition, GLMM fit for this dataset seems to have better looking residuals than GLM fit. 
 
+
+
+# Switch timing variability
+Here we try to describe the variability in the timing of switch between long and short foraging trips. 
+
+## Modeling timing of switch
+Now we try to create a model switch ~ explanatory variables.  
+What are the characteristics of the shelf environment associated with the switch date?
+
+### Preparing dataset for modeling timing of switch
+It seems to make sense that if we're only interested in when the switch occurs, we should remove post-swtich trips from modeling.
+
+```{r}
+fts2 <- ft2 %>% mutate(switch = 0) 
+fts2$switch[switch_ind] <- 1
+
+# this dataset removes post-switch trips 
+fts2 <- fts2[!is.na(fts2$t_mean),] %>% 
+  filter(id != '315', id!='353' ) %>% 
+  group_by(id) %>% 
+  filter(date <= date[which(switch ==1)]) %>% 
+  ungroup() %>% 
+  mutate(switch = as.factor(switch))
+
+table(fts2$switch)
+
+```
+
+### Collinearity
+```{r}
+# load function from Zuur 2009
+source("HighstatLib.r")
+
+# remove all non-continuous vars
+
+# keep removing variables 1 by 1 with vif > 3 until no more vars have vif > 3
+fts3 <- fts2 %>% dplyr::select(-X, -id, -minLat, -Lon_minLat, -floc, -date, -season, -year, -switch,
+                               -SSTA_min, -SSHA_max, -SSHA_mean, -SSTA_max, -t_SD, -t_mean)
+  # select(tsd, tmean, salsd, salmean, mldsd, mldmean, sam, ASSTa, sdSSTa, mSSTa, maxSSTa, minSSTa, -sdSSTa, -mSSTa, -tmean, -minSSTa, -tsd)
+
+corvif(fts3)
+
+# add the nominal variables back to processed dataset.
+fts3 <- bind_cols(fts3, fts2[,c('season', 'year', 'id', 'switch', 'X','date')])
+```
+
+### Transformations
+```{r message=FALSE, warning=FALSE}
+# before transformation
+fts2 %>% 
+  dplyr::select(tsd, tmean, salsd, salmean, mldsd, mldmean) %>% 
+  gather() %>% 
+  ggplot(aes(x = value)) +
+  geom_density() +
+  facet_wrap(~key, scales = "free")
+
+fts2 %>% dplyr::select(tsd, tmean, salsd, salmean, mldsd, mldmean) %>% 
+  mutate_each(funs(log)) %>% 
+  map(shapiro.test)
+
+# after sqrt transformation 
+ft2 %>% 
+  dplyr::select(tsd, tmean, salsd, salmean, mldsd, mldmean) %>% 
+  gather() %>% 
+  mutate(value = (value)) %>% 
+  ggplot(aes(x = value)) +
+  geom_density() +
+  facet_wrap(~key, scales = "free")
+
+# after log transformation
+fts2 %>% 
+  dplyr::select(tsd, tmean, salsd, salmean, mldsd, mldmean) %>% 
+  gather() %>% 
+  mutate(value = log(value)) %>% 
+  ggplot(aes(x = value)) +
+  geom_density() +
+  facet_wrap(~key, scales = "free")
+
+# Box-cox transofmration 
+caret::BoxCoxTrans(cars$dist)
+
+```
+
+
+### Prepare dataset for modeling
+We filter out oberservations from seal 315 and 353 since they don't show alternate foraging strategies.
+```{r}
+fts4 <- fts3
+fts4_pp <- caret::preProcess(fts4, method = c('center', 'scale'))
+data4 <- predict(fts4_pp, fts4)
+
+```
+
+
+### GLMM
+I treat year as a fixed effect because there are only 2 levels (2016, 2017). One general rule for random effects is if the variable has > 4 levels. 
+```{r warning=FALSE, results='hide'}
+m0 <- glmer(switch ~ 1 + (1|id), data = data4, family = binomial, nAGQ = 25)
+# m1 <- glmer(switch ~ tmean + salsd + salmean + mldsd + mldmean + sam + ASSTa + sdSSTa + maxSSTa + X +year + (1|id) , data = data3, family = binomial, nAGQ = 1)
+m1 <- glmer(switch ~  sal_SD + sal_mean + mld_SD + mld_mean + sam + SSTa_ncells + SSTA_SD + SSTA_mean + SSHA_SD + SSHA_min + year + (1|id) , data = data4, family = binomial, nAGQ = 25)
+drop1(m1,test="Chisq")
+summary(m1) #convergence problem. stop analysis here. try GLM, remove random effects. 
+
+m2 <- update(m1, .~. -sal_mean)
+drop1(m2,test="Chisq")
+m3 <- update(m2, .~.-SSHA_SD)
+drop1(m3,test="Chisq")
+m4 <- update(m3, .~.-mld_SD)
+drop1(m4,test="Chisq")
+m5 <- update(m4, .~. -sal_SD)
+drop1(m5,test="Chisq")
+m6 <- update(m5, .~.-sam)
+drop1(m6,test="Chisq")
+m7 <- update(m6, .~.-SSTa_ncells)
+drop1(m7,test="Chisq")
+m8 <- update(m7, .~.-year)
+drop1(m8,test="Chisq")
+m9 <- update(m8, .~.-SSTA_SD )
+drop1(m9,test="Chisq")
+m10 <- update(m9, .~.-SSTA_mean)
+drop1(m10,test="Chisq")
+m11 <- update(m10, .~.+mld_mean*SSHA_min)
+drop1(m11,test="Chisq")
+m12 <- update(m10, .~. +mld_mean*year)
+drop1(m12,test="Chisq")
+m13 <- update(m12, .~. -SSHA_min)
+drop1(m13,test="Chisq")
+
+```
+
+### Model selection
+optimal model is when summary(model) shows all terms are significant. 
+```{r}
+
+n <- 0:13
+mn <- sprintf(paste0("m", n), n)
+aicc <- bbmle::ICtab(m0, m1,m2,m3,m4,m5,m6,m7,m8,m9,m10,m11,m12,m13, base = TRUE, logLik = TRUE, weights = TRUE, type = "AICc")
+aicc <- data.frame(aicc[], mod = attributes(aicc)$row.names)
+mlist <- list(m0,m1,m2,m3,m4,m5,m6,m7,m8,m9,m10,m11,m12,m13)
+formula <- map_chr(mlist, function(x)strsplit(as.character(attributes(x@frame)$formula), '~')[[3]])
+mst <- data.frame(mod = mn, formula = formula)
+mst <- left_join(mst, aicc, by = 'mod')
+mst <- mst %>% arrange(dAICc)
+mst %>% 
+  kable('html') %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), font_size = 12)
+```
+
+### Diagnostics
+If model is underdispersed it's less of a worry because it means the model is more conservative i.e. less chance of type 1 errors. 
+```{r}
+best4 <- m12
+# check residuals
+summary(best4, corr = F)
+
+# model failed to converge? if you havent centered and scaled continuous variables do that first. Then try increasing the number of nAGQ argument
+# best4 <- update(best4, nAGQ = 20)
+# summary(best4)
+
+plot(best4)
+binnedplot(fitted(best4),resid(best4, type = 'response'))
+
+# check overdispersion - you want p > 0.05
+source('overdispersion.R')
+# overdisp_fun(best3t)
+
+# set.seed(105)
+# simulationOutput <- simulateResiduals(fittedModel = best3, n = 250, refit = T)
+simulationOutput <- simulateResiduals(fittedModel = best4, n = 250)
+plotSimulatedResiduals(simulationOutput = simulationOutput) 
+testUniformity(simulationOutput = simulationOutput)
+overdisp_fun(best4)
+# plotResiduals(data3$tmean, simulationOutput$scaledResiduals)
+# a more powerful test for overdispersion, you want p value > 0.05
+# testOverdispersion(simulationOutput = simulationOutput)
+# testOverdispersionParametric(best3)
+testTemporalAutocorrelation(simulationOutput = simulationOutput, time = data4$date, plot=F)
+
+```
+
+Diagnostics look ok, no assumption violations. 
+
+### Interpretation - Effects
+```{r fig.height=15, fig.width=15}
+summary(best4)
+plot(allEffects(best4))
+```
+
+
+
+Check if random effect individual contributes to model fit
+```{r}
+best3a <-  glm(switch ~ logtmean + logmldmean, data = data3, family = binomial)
+anova(best3, best3a)
+```
+
+Individual random effect doesn't improve fit   
+
+Check if adding trip to account for pseudo-replication improves model fit
+```{r}
+best3b <- glmer(switch ~ logtmean + logmldmean + (1|X), data = data3, family = binomial)
+anova(best3b, best3a)
+```
+
+Trip random effect doesn't improve model fit.   
+
+
+### GLM
+Try fitting without random effect i.e. glm
+```{r results='hide', warning=FALSE}
+m0 <- glm(switch ~ 1 , data = data4, family = binomial)
+m1 <- glm(switch ~ sal_SD + sal_mean + mld_SD + mld_mean + sam + SSTa_ncells + SSTA_SD + SSTA_mean + SSHA_SD + SSHA_min + year  , data = data4, family = binomial)
+step(m1, test="LRT")
+m2 <- glm(switch ~ SSTA_mean + sam + SSHA_min + mld_mean, data = data4, family = binomial)
+m3 <- update(m2, .~. -SSTA_mean)
+drop1(m3,test="Chisq")
+m4 <- update(m3, .~. -sam)
+drop1(m4,test="Chisq")
+m5 <- update(m4, .~. -SSHA_min)
+drop1(m5,test="Chisq")
+m6 <- update(m5, .~. +mld_mean*SSHA_min)
+drop1(m6,test="Chisq")
+
+m7 <-  update(m5, .~. +mld_mean*year)
+m8 <-  update(m7, .~. +mld_mean*year +SSHA_min)
+# glm(switch ~ SSHA_min + mld_mean*year , data = data4, family = binomial)
+
+# m3 <- glm(switch ~ mld_mean*year + SSHA_min, data = data4, family = binomial)
+# m5 <- glm(switch ~ logtmean + mldmean + sdSSTa + year , data = data3, family = binomial)
+# m6 <- update(m4, .~. + logtmean*year)
+# m7 <- update(m4, .~. + logsdSSTa*year)
+# m8 <- update(m4, .~. + logsdSSTa*logtmean)
+# m9 <- update(m4, .~. -mldmean + logtmean*salmean)
+# m10 <- update(m4, .~. -mldmean + logtmean *year + year*logsdSSTa)
+# m11 <- glm(switch ~ tmean*salmean + sdSSTa +year  , data = data3, family = binomial)
+
+n <- 0:8
+mn <- sprintf(paste0("m", n), n)
+aicc <- bbmle::AICctab(m0,m1,m2,m3,m4,m5,m6,m7,m8)
+aicc <- data.frame(dAICc = aicc$dAICc, df = aicc$df, mod = attributes(aicc)$row.names)
+mlist <- list(m0,m1,m2,m3,m4,m5,m6,m7,m8)
+formula <- map_chr(mlist, function(x)strsplit(as.character(x$call)[2], '~')[[1]][2])
+mst <- data.frame(mod = mn, formula = formula)
+mst <- left_join(mst, aicc, by = 'mod')
+mst <- mst %>% arrange(dAICc) %>% mutate(dAICc = round(dAICc,1))
+mst
+
+
+```
+
+#### Diagnostics
+```{r}
+sglm_best <- m8
+
+# An improved Q-Q plot, from Augustin et al (2012)
+# mgcv::qq.gam(model.m,pch=16)
+
+# check overdispersion (if ratio is > 5 be worried, if < 2 should be ok)
+resid.ssq <- sum(residuals(sglm_best,type="pearson")^2)
+resid.df <- nrow(data4)-length(coef(sglm_best))
+resid.ssq/resid.df # [1] 1.084719 ~ 1 therefore not overdispersed
+
+# Goodness of fit test - we want p > 0.05
+ResourceSelection::hoslem.test(as.integer(as.character(data4$switch)), fitted(sglm_best), g = 10)
+
+# residual plots
+car::residualPlots(sglm_best)
+
+# extra diagnostic tests using DHARMa
+simulationOutput <- simulateResiduals(fittedModel = sglm_best, n = 250)
+plotSimulatedResiduals(simulationOutput = simulationOutput) 
+testUniformity(simulationOutput = simulationOutput)
+testTemporalAutocorrelation(simulationOutput = simulationOutput, time = data4$date, plot = F)
+
+plot(allEffects(sglm_best))
+summary(sglm_best)
+```
+
+Diagnostics look good - there is no overdispersion, and residuals are uniform. I tried diagnostics on the same model with log-transformed variables (not shown) but the models were overdispered (similar to the GLMM version).  
+
+We can see here that there all residual plots are more or less null plots i.e. no pattern in the curve. For year (categorical) data, we want boxplots to have roughly same median and spread as seems to be the case here.  
+
+
+```{r eval = FALSE, echo = FALSE}
+resids <- as.data.frame(residuals(best3.glm, type="partial"))
+ggplot(data = NULL, aes(data3$logtmean, resids$logtmean)) + geom_smooth()
+ggplot(data = NULL, aes(data3$logsdSSTa, resids$logsdSSTa)) + geom_smooth()
+ggplot(data = NULL, aes(data3$year, resids$year)) + geom_boxplot()
+# ggplot(data = NULL, aes(data3$mldmean, resids$mldmean)) + geom_smooth()
+```
+
+
+Females more likely to switch foraging strategy (shelf to oceanic foraging) as tmean (warmer water column temperature) and mldmean (deeper mld associated with non-upwelling-favourable conditions) increases.
+
+week number did not contribute to model fit. I assume week can be considered as "time"  which is associated with seasonal change -> larger pups (life-history constraint). Might not be appropriate to make that interpretation though. 
 
 # LEF grant analysis (using only 2017 data)
 ## Shelf vs Oceanic foraging trips

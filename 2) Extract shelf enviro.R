@@ -7,20 +7,20 @@ library(RcppRoll)
 
 ## Import foraging trips
 # combine into single dataframe
-ff <- list.files(pattern = 'foragingtrips')
+ff <- list.files('./foraging trip analysis', pattern = 'foragingtrips', full.names = T)
 ft <- data.frame()
 for(i in seq_along(ff)){
   f <- read.csv(ff[i])
   f$StartDate <- as.POSIXct(f$StartDate, 'GMT')
   f$LastDate <- as.POSIXct(f$LastDate, 'GMT')
-  f$id <- strsplit(ff[i], split = '_')[[1]][1]
+  f$id <- strsplit(str_remove(ff[i], './foraging trip analysis/'), split = '_')[[1]][1]
   ft <- rbind(ft, f)
 }
 ft <- tbl_df(ft)
 # ft <- ft %>% select(X, StartDate, LastDate, Dur, colonytime, colony, id)
 
 
-# Get maximum south location ----------------------------------------------
+# Classify trips into shelf, shelf break or oceanic types ----------------------------------------------
 
 ## Import foraging tracks
 load("glsTracksAll.RData")
@@ -70,40 +70,52 @@ ggplot() +
   geom_point(data = ft, aes(Lon_minLat, minLat, color = floc), size = 0.5)
 
 
-# Get bonney upwelling/shelf parameters -----------------------------------------
-load('bonneyupwelling_ssta_2016-2017.Rdata')
-# load("bonneyupwelling_chlanom_2016-2017.Rdata")
-# load('shelf(iso1000)_ssta_2016-2017.Rdata')
-load('shelf(iso2000)_ssta_2016-2017.Rdata')
-load('SSHA_shelf(isobath2000)_2016-17.Rdata')
-load("upwelling_wind_index_2016-17.Rdata")
+# Extract shelf enviro parameters -----------------------------------------
+load('./enviro data/bonneyupwelling_ssta_2016-2017.Rdata')
+load('./enviro data/shelf(iso2000)_ssta_2016-2017.Rdata')
+load('./enviro data/SSHA_shelf(isobath2000)_2016-17.Rdata')
+load("./enviro data/bonneycoast_10m_upwelling_wind_index_1997-2017.RData")
 she <- tbl_df(she)
 ssha_shelf <- tbl_df(ssha_shelf)
-w <- tbl_df(w)
+w <- uw %>% rename(wind_index = upwell_wind)
 
-## Calculate daily BU SSTa area (each cell is 0.25 degrees resolution)
+## Bonney Upwelling SSTa area -----
+# Calculate daily BU SSTa area (each cell is 0.25 degrees resolution)
 bu <- bud %>% group_by(date) %>% summarise(SSTa_ncells = sum(!is.na(v1)))
 
-## Calculate daily mean, sd, max and min of shelf SST anomaly (SSTA) and shelf SSH anomaly (SSHA)
+## Shelf SSTA, SSHA -----
+# Calculate daily mean, sd, max and min of shelf SST anomaly (SSTA) and shelf SSH anomaly (SSHA)
 a <- she %>% filter(!is.na(v1)) %>% group_by(date) %>% summarise(SSTA_SD = sd(v1, na.rm = T), SSTA_mean = mean(v1, na.rm = T), SSTA_max = max(v1, na.rm = T), SSTA_min = min(v1, na.rm = T))
 b <- ssha_shelf %>% filter(!is.na(v1)) %>% group_by(date) %>% summarise(SSHA_SD = sd(v1, na.rm = T), SSHA_mean = mean(v1, na.rm = T), SSHA_max = max(v1, na.rm = T), SSHA_min = min(v1, na.rm = T))
 shelf <- left_join(bu, a, by = 'date')
 shelf <- left_join(shelf, b, by = 'date')
-shelf <- left_join(shelf, w[,c('date', 'wind_index')], by = 'date')
 
-## Calculating rolling 5-day means (past 5 days) 
+# Calculating rolling 5-day means (past 5 days) 
 shelf5d <- shelf %>% ungroup() %>% map_df(~ roll_mean(.x, n = 5, align = 'right', na.rm = T))
 shelf5d$date <- shelf$date[-c(1:4)]
 
-# Get IMOS ASL shelf data -------------------------------------------------
-imos <- tbl_df(read.csv("IMOS_CTD_ASL_FEB2016.csv")) %>% dplyr::select(timestamp, lon, lat, profile_id, pressure, temp_vals, sal_corrected_vals)
-imosb <- tbl_df(read.csv("IMOS_CTD_ASL_MAR2017.csv", skip = 251) %>% dplyr::select(timestamp, lon, lat, profile_id,  pressure, temperature, salinity))
+## Alongshore wind stress -----
+# calc 5-day rolling mean and sd of windstress
+w5d<- w %>% 
+  ungroup() %>% 
+  dplyr::select(date, wind_index) %>% 
+  slice(-1:-4) %>% 
+  mutate(wind_mean = roll_mean(w$wind_index, n = 5, align = 'right', na.rm = T), 
+         wind_SD = roll_sd(w$wind_index, n= 5, align = 'right', na.rm = T),
+         wind_min = roll_min(w$wind_index, n= 5, align = 'right', na.rm = T),
+         wind_max = roll_max(w$wind_index, n= 5, align = 'right', na.rm = T))
+
+shelf5d <- left_join(shelf5d, w5d, by = 'date')
+
+## IMOS ASL CTD data on shelf: MLD, TEMP, SALINITY -----
+imos <- tbl_df(read.csv("./enviro data/IMOS_CTD_ASL_FEB2016.csv")) %>% dplyr::select(timestamp, lon, lat, profile_id, pressure, temp_vals, sal_corrected_vals)
+imosb <- tbl_df(read.csv("./enviro data/IMOS_CTD_ASL_MAR2017.csv", skip = 251) %>% dplyr::select(timestamp, lon, lat, profile_id,  pressure, temperature, salinity))
 colnames(imos) <- colnames(imosb)
 imos <- rbind(imos, imosb)
 imos$timestamp <- as.POSIXct(strptime(imos$timestamp, format = "%Y-%m-%dT%H:%M:%S"), tz = "GMT")
 anytime::anydate(sapply(split(imos$timestamp, lubridate::year(imos$timestamp)), range))
 
-## Calculate MLD
+# write calculate MLD function
 library(oce)
 calculate.mld <- function(sigma, z, deltaSigma = 0.125) { 
   # check that the number of sigma and z values are equal 
@@ -197,13 +209,15 @@ calculate.mld <- function(sigma, z, deltaSigma = 0.125) {
     mld 
   } 
 } 
+
+# calculate MLD 
 # imos_1profile <- imos %>% filter(profile_id == 6154029)
 tmp_sigma <- lapply(split(imos, imos$profile_id), function(x) return(with(x, swSigma0(salinity, temperature, pressure, lon, lat))))
 tmp_mld <- map2(tmp_sigma, split(imos$pressure, imos$profile_id), calculate.mld)
 tmp_mld <- data.frame(profile_id = as.integer(as.character(names(tmp_mld))), mld = unlist(tmp_mld))
 imos <- left_join(imos, tmp_mld, by = 'profile_id')
 
-## Shelf summary stats
+## Summary statistics for MLD, TEMP, SALNITY per dive profile
 # check which profile id only has 1 observation
 unique(table(imos$profile_id))
 r <- names(table(imos$profile_id))[ table(imos$profile_id) < 20]
@@ -217,20 +231,14 @@ imos2 <- imos %>% filter(!profile_id %in% r) %>% mutate(date = as.Date(timestamp
             mld_SD = sd(mld, na.rm = T), mld_mean = mean(mld, na.rm = T))
 
 # save(imos2, file = 'ASLCTD_IMOS_2016-2017.RData')
-# ggplot(imos2, aes(1, sal_mean)) + geom_boxplot()
-# imos2 %>% ggplot(aes(date, mld_mean)) + geom_point()
-
 
 # Get SAM data ------------------------------------------------------------
 # download.file('ftp://ftp.cpc.ncep.noaa.gov/cwlinks/norm.daily.aao.index.b790101.current.ascii',
 #               destfile = 'sam.ascii')
 
-sam <- readr::read_table('sam.ascii', col_names = c('year', 'month', 'day', 'sam'))
+sam <- readr::read_table('./enviro data/sam.ascii', col_names = c('year', 'month', 'day', 'sam'))
 sam <- sam %>% mutate(date = as.Date(sprintf('%s-%s-%s', year, month, day)))
 # save(sam, file = 'sam.Rdata')
-
-sam %>% filter(year > 2015) %>% ggplot(aes(date, sam)) + geom_path()
-
 
 # Add all shelf parameters to foraging trips ------------------------------
 ft$date <- as.Date(ft$StartDate)
@@ -263,5 +271,5 @@ ft$season <- getSeason(ft$date)
 ft$season <- factor(ft$season)
 
 ft$floc <- factor(ft$floc)
-# save(ft, file=  'lnfsForagingTrips_ShelfVars(iso2000).Rdata')
-# 
+save(ft, file=  './extract shelf enviro/lnfsForagingTrips_ShelfVars(iso2000).Rdata')
+
